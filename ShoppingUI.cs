@@ -3,170 +3,226 @@ using UnityEngine.UI;
 using TMPro;
 using System.Collections.Generic;
 
-[System.Serializable]
-public class FoodItem
-{
-    public string itemName;
-    public GameObject prefab;
-    public int carbonValue;
-    public int calories;
-    public int count;
-}
-
+/// <summary>
+/// Handles virtual shopping logic: item tracking, carbon & calorie calculations, UI updates, and 3D instantiations.
+/// </summary>
 public class NumberToIncrease : MonoBehaviour
 {
-    [Header("UI Elements")]
-    public Button[] addButtons;
-    public Button[] subtractButtons;
-    public TextMeshProUGUI[] numberTexts;
-    public TextMeshProUGUI[] carbonTexts;
-    public TextMeshProUGUI[] caloriesTexts;
+    [System.Serializable]
+    public class FoodItem
+    {
+        public string itemName;              // Name of the food item
+        public GameObject prefab;            // Prefab to instantiate in the basket
+        public int carbonValue;              // Carbon footprint per unit (gCO2e)
+        public int calories;                 // Calories per unit
+        [HideInInspector] public int count;  // Number of items added (internal use)
+    }
 
+    [Header("Food Data")]
+    public List<FoodItem> foodItems; // List of all food items to display and track
+
+    [Header("UI Elements")]
+    public Button[] addButtons;           // "+" buttons for each item
+    public Button[] subtractButtons;      // "-" buttons for each item
+    public TextMeshProUGUI[] numberTexts; // Displays item count
+    public TextMeshProUGUI[] carbonTexts; // Displays carbon value for each item
+    public TextMeshProUGUI[] caloriesTexts; // Displays calories for each item
+
+    [Header("Progress Bars")]
+    public ProgressBar progressBar;           // Linear bar for carbon tracking
+    public ProgressBar progressBarRadial;     // Radial bar for carbon
+    public ProgressBar progressBarRadialCalories; // Radial bar for calorie tracking
+
+    [Header("Total Display")]
     public TextMeshProUGUI totalCarbonText;
     public TextMeshProUGUI warningText;
     public TextMeshProUGUI feedbackText;
     public TextMeshProUGUI caloriesText;
 
-    public ProgressBar progressBar;
-    public ProgressBar progressBarRadial;
-    public ProgressBar progressBarRadialCalories;
+    [Header("3D Basket Display")]
+    public Transform basketTransform;         // Parent transform where 3D food models are spawned
+    private List<GameObject> allSpawnedItems = new List<GameObject>(); // Track all spawned models
+    private List<GameObject>[] spawnedItems;  // Track spawned items by type
 
-    [Header("Food Items")]
-    public List<FoodItem> foodItems = new List<FoodItem>();
-    public Transform basketTransform;
-
-    private List<GameObject>[] spawnedItems;
-    private List<GameObject> allSpawnedItems = new List<GameObject>();
-
-    [Header("Environment Elements")]
-    public GameObject ocean;
-    private WaterMovement waterMovement;
+    [Header("Environment Feedback")]
+    public GameObject ocean;                  // Ocean GameObject to reflect environmental impact
     private Material oceanMaterial;
+    private WaterMovement waterMovement;      // Script controlling water movement visuals
 
-    private int carbonLimit = 36000;
-    private int calorieTarget = 20726;
+    [Header("Thresholds")]
+    public int carbonLimit = 36000;           // Max carbon budget
+    public int caloriesIntakeRequired = 20726;// Suggested daily calorie intake
 
     void Start()
     {
-        // Setup water system
-        waterMovement = ocean.GetComponent<WaterMovement>();
-        Renderer oceanRenderer = ocean.GetComponent<Renderer>();
-        if (oceanRenderer != null)
-            oceanMaterial = oceanRenderer.material;
-
-        // Setup food tracking
+        // Initialize spawn tracking for each food item
         spawnedItems = new List<GameObject>[foodItems.Count];
         for (int i = 0; i < foodItems.Count; i++)
         {
             spawnedItems[i] = new List<GameObject>();
-            int index = i;
-            addButtons[i].onClick.AddListener(() => UpdateItem(index, +1));
+
+            int index = i; // Capture loop variable for closure
+            addButtons[i].onClick.AddListener(() => UpdateItem(index, 1));
             subtractButtons[i].onClick.AddListener(() => UpdateItem(index, -1));
         }
 
+        // Get material for visual feedback (ocean rising, etc.)
+        if (ocean != null)
+        {
+            oceanMaterial = ocean.GetComponent<Renderer>().material;
+            waterMovement = ocean.GetComponent<WaterMovement>();
+        }
+
+        // Initialize UI with current (zeroed) data
         UpdateAllDisplays();
     }
 
-    private void UpdateItem(int index, int change)
+    /// <summary>
+    /// Handles adding/removing item and updating everything accordingly.
+    /// </summary>
+    void UpdateItem(int index, int change)
     {
         FoodItem item = foodItems[index];
         item.count += change;
+
+        // Prevent negative counts
         if (item.count < 0)
         {
             item.count = 0;
             return;
         }
 
-        UpdateUI(index);
+        // Update individual UI displays
+        numberTexts[index].text = item.count.ToString();
+        carbonTexts[index].text = (item.count * item.carbonValue) + " gCO2e";
+        caloriesTexts[index].text = (item.count * item.calories) + " kcal";
 
+        // Add or remove 3D object in basket
         if (change > 0)
             AddFoodItem(index);
         else
             RemoveFoodItem(index);
 
+        // Update totals
         CalculateTotalCarbon();
         CalculateTotalCalories();
     }
 
-    private void UpdateUI(int index)
+    /// <summary>
+    /// Adds food prefab to basket with appropriate position.
+    /// </summary>
+    void AddFoodItem(int index)
     {
         FoodItem item = foodItems[index];
-        numberTexts[index].text = item.count.ToString();
-        carbonTexts[index].text = (item.count * item.carbonValue) + " gCO2e";
-        caloriesTexts[index].text = (item.count * item.calories) + " kcal";
-    }
 
-    private void AddFoodItem(int index)
-    {
-        FoodItem item = foodItems[index];
         if (item.prefab != null)
         {
-            GameObject obj = Instantiate(item.prefab, basketTransform);
+            GameObject newFood = Instantiate(item.prefab, basketTransform);
 
-            int totalCount = allSpawnedItems.Count;
-            int row = totalCount / 10;
-            int col = totalCount % 10;
+            // Position based on total number of items
+            int total = allSpawnedItems.Count;
+            int row = total / 10;
+            int col = total % 10;
+
             float xOffset = col * 0.2f;
             float yOffset = -row * 0.2f;
 
-            obj.transform.localPosition = new Vector3(xOffset, yOffset, 0);
+            // Optional: slight randomness for realism
+            float randomOffset = UnityEngine.Random.Range(-0.05f, 0.05f);
 
-            allSpawnedItems.Add(obj);
-            spawnedItems[index].Add(obj);
+            newFood.transform.localPosition = new Vector3(xOffset + randomOffset, yOffset, 0);
+
+            // Track item
+            allSpawnedItems.Add(newFood);
+            spawnedItems[index].Add(newFood);
         }
     }
 
-    private void RemoveFoodItem(int index)
+    /// <summary>
+    /// Removes last-added instance of this food type from the basket.
+    /// </summary>
+    void RemoveFoodItem(int index)
     {
         if (spawnedItems[index].Count > 0)
         {
             GameObject last = spawnedItems[index][spawnedItems[index].Count - 1];
+
             spawnedItems[index].RemoveAt(spawnedItems[index].Count - 1);
             allSpawnedItems.Remove(last);
             Destroy(last);
+
+            // Re-layout items
             RepositionItems();
         }
     }
 
-    private void RepositionItems()
+    /// <summary>
+    /// Repositions all basket items after one is removed.
+    /// </summary>
+    void RepositionItems()
     {
         for (int i = 0; i < allSpawnedItems.Count; i++)
         {
+            GameObject obj = allSpawnedItems[i];
             int row = i / 10;
             int col = i % 10;
+
             float xOffset = col * 0.2f;
             float yOffset = -row * 0.2f;
+            float randomOffset = UnityEngine.Random.Range(-0.05f, 0.05f);
 
-            allSpawnedItems[i].transform.localPosition = new Vector3(xOffset, yOffset, 0);
+            obj.transform.localPosition = new Vector3(xOffset + randomOffset, yOffset, 0);
         }
     }
 
-    private void CalculateTotalCarbon()
+    /// <summary>
+    /// Calculates and updates total carbon footprint.
+    /// </summary>
+    void CalculateTotalCarbon()
     {
         int totalCarbon = 0;
+
         foreach (var item in foodItems)
+        {
             totalCarbon += item.count * item.carbonValue;
+        }
 
         totalCarbonText.text = "Total: " + totalCarbon + " gCO2e";
-        warningText.text = totalCarbon >= carbonLimit ? "Carbon limit reached!" : "";
 
+        // Show warning if over limit
+        warningText.text = totalCarbon >= carbonLimit ? "Carbon limit reached" : "";
+
+        // Update progress bars
         if (progressBar != null)
         {
             progressBar.current = totalCarbon;
             progressBar.GetCurrentFill();
         }
+
         if (progressBarRadial != null)
         {
             progressBarRadial.current = totalCarbon;
             progressBarRadial.GetCurrentFill();
         }
+
+        // Optional: update environment visuals
+        if (waterMovement != null)
+        {
+            waterMovement.UpdateWaterLevel(totalCarbon);
+        }
     }
 
-    private void CalculateTotalCalories()
+    /// <summary>
+    /// Calculates and updates total calories consumed.
+    /// </summary>
+    void CalculateTotalCalories()
     {
         int totalCalories = 0;
+
         foreach (var item in foodItems)
+        {
             totalCalories += item.count * item.calories;
+        }
 
         caloriesText.text = "Calories: " + totalCalories + " kcal";
 
@@ -177,11 +233,17 @@ public class NumberToIncrease : MonoBehaviour
         }
     }
 
-    private void UpdateAllDisplays()
+    /// <summary>
+    /// Updates the entire UI display on scene start or refresh.
+    /// </summary>
+    void UpdateAllDisplays()
     {
         for (int i = 0; i < foodItems.Count; i++)
         {
-            UpdateUI(i);
+            FoodItem item = foodItems[i];
+            numberTexts[i].text = item.count.ToString();
+            carbonTexts[i].text = (item.count * item.carbonValue) + " gCO2e";
+            caloriesTexts[i].text = (item.count * item.calories) + " kcal";
         }
 
         CalculateTotalCarbon();
